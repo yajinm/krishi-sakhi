@@ -8,7 +8,9 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseSettings, Field, validator
+# This is the line we are fixing. We removed 'BaseSettings' from here.
+from pydantic import Field, validator
+# And made sure it's imported from the correct new package.
 from pydantic_settings import BaseSettings as PydanticBaseSettings
 
 
@@ -58,8 +60,8 @@ class Settings(PydanticBaseSettings):
     otp_max_attempts: int = Field(default=3, env="OTP_MAX_ATTEMPTS")
 
     # Security
-    secret_key: str = Field(..., env="SECRET_KEY")
-    encryption_key: str = Field(..., env="ENCRYPTION_KEY")
+    secret_key: str = Field(default="DEFAULT_SECRET_KEY_CHANGE_ME", env="SECRET_KEY")
+    encryption_key: str = Field(default="DEFAULT_ENCRYPTION_KEY_CHANGE_ME", env="ENCRYPTION_KEY")
 
     # External Services
     openweather_api_key: Optional[str] = Field(default=None, env="OPENWEATHER_API_KEY")
@@ -71,6 +73,7 @@ class Settings(PydanticBaseSettings):
     smtp_port: int = Field(default=587, env="SMTP_PORT")
     smtp_username: Optional[str] = Field(default=None, env="SMTP_USERNAME")
     smtp_password: Optional[str] = Field(default=None, env="SMTP_PASSWORD")
+    gemini_api_key: Optional[str] = Field(default=None, env="GEMINI_API_KEY")
 
     # Provider Configuration
     asr_provider: str = Field(default="dummy", env="ASR_PROVIDER")
@@ -245,3 +248,4 @@ settings = Settings()
 def get_settings() -> Settings:
     """Get application settings."""
     return settings
+
