@@ -1,0 +1,315 @@
+# Krishi Sakhi - Makefile
+# Production-grade backend for AI-Powered Personal Farming Assistant
+
+.PHONY: help up down logs fmt lint test test-coverage seed flower clean build dev-install install-deps
+
+# Default target
+help: ## Show this help message
+	@echo "Krishi Sakhi - AI-Powered Personal Farming Assistant"
+	@echo "=================================================="
+	@echo ""
+	@echo "Available targets:"
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z_-]+:.*?## / {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+# Docker operations
+up: ## Start all services with docker-compose
+	docker-compose up -d
+	@echo "Services started. API available at http://localhost:8000"
+	@echo "Flower (Celery monitor) at http://localhost:5555"
+	@echo "Run 'make logs' to view logs"
+
+down: ## Stop all services
+	docker-compose down
+
+restart: ## Restart all services
+	docker-compose restart
+
+logs: ## View logs from all services
+	docker-compose logs -f
+
+logs-api: ## View API service logs
+	docker-compose logs -f api
+
+logs-worker: ## View Celery worker logs
+	docker-compose logs -f worker
+
+logs-db: ## View database logs
+	docker-compose logs -f db
+
+# Development setup
+dev-install: ## Install development dependencies
+	pip install -e ".[dev]"
+	pre-commit install
+
+install-deps: ## Install production dependencies
+	pip install -e .
+
+# Code quality
+fmt: ## Format code with black and isort
+	black app tests scripts
+	isort app tests scripts
+	ruff --fix app tests scripts
+
+lint: ## Run linters (ruff, mypy, bandit)
+	ruff check app tests scripts
+	mypy app
+	bandit -r app -f json -o bandit-report.json || true
+	@echo "Linting completed. Check bandit-report.json for security issues."
+
+lint-fix: ## Fix linting issues automatically
+	ruff check --fix app tests scripts
+	black app tests scripts
+	isort app tests scripts
+
+# Testing
+test: ## Run tests with pytest
+	pytest tests/ -v --tb=short
+
+test-coverage: ## Run tests with coverage report
+	pytest tests/ -v --cov=app --cov-report=html --cov-report=term-missing
+	@echo "Coverage report generated in htmlcov/index.html"
+
+test-unit: ## Run unit tests only
+	pytest tests/ -v -m "not integration and not e2e" --tb=short
+
+test-integration: ## Run integration tests
+	pytest tests/ -v -m "integration" --tb=short
+
+test-e2e: ## Run end-to-end tests
+	pytest tests/ -v -m "e2e" --tb=short
+
+test-fast: ## Run fast tests (exclude slow tests)
+	pytest tests/ -v -m "not slow" --tb=short
+
+# Database operations
+migrate: ## Run database migrations
+	docker-compose exec api alembic upgrade head
+
+migrate-create: ## Create new migration (usage: make migrate-create MESSAGE="description")
+	docker-compose exec api alembic revision --autogenerate -m "$(MESSAGE)"
+
+migrate-downgrade: ## Downgrade database by one migration
+	docker-compose exec api alembic downgrade -1
+
+# Data operations
+seed: ## Seed database with demo data
+	docker-compose exec api python scripts/seed_demo.py
+
+seed-reset: ## Reset and reseed database
+	docker-compose exec api python scripts/reset_and_seed.py
+
+export-data: ## Export user data (usage: make export-data USER_ID=123)
+	docker-compose exec api python scripts/export_user_data.py --user-id $(USER_ID)
+
+# Monitoring and debugging
+flower: ## Open Flower dashboard in browser
+	@echo "Opening Flower dashboard..."
+	@if command -v xdg-open > /dev/null; then xdg-open http://localhost:5555; \
+	elif command -v open > /dev/null; then open http://localhost:5555; \
+	else echo "Please open http://localhost:5555 in your browser"; fi
+
+health: ## Check health of all services
+	@echo "Checking service health..."
+	@curl -s http://localhost:8000/health | jq . || echo "API not responding"
+	@curl -s http://localhost:5555/api/workers | jq . || echo "Flower not responding"
+	@docker-compose ps
+
+shell: ## Open shell in API container
+	docker-compose exec api bash
+
+shell-db: ## Open PostgreSQL shell
+	docker-compose exec db psql -U postgres -d krishi_sakhi
+
+# Build and deployment
+build: ## Build Docker images
+	docker-compose build
+
+build-no-cache: ## Build Docker images without cache
+	docker-compose build --no-cache
+
+push: ## Push images to registry (configure registry in docker-compose.yml)
+	docker-compose push
+
+# Security and compliance
+security-scan: ## Run security scans
+	bandit -r app -f json -o security-report.json
+	safety check --json --output safety-report.json
+	@echo "Security reports generated: security-report.json, safety-report.json"
+
+audit: ## Audit dependencies for vulnerabilities
+	safety check
+	pip-audit
+
+# Performance testing
+load-test: ## Run load tests with locust
+	locust -f tests/load/locustfile.py --host=http://localhost:8000
+
+benchmark: ## Run performance benchmarks
+	pytest tests/benchmark/ -v --benchmark-only
+
+# Documentation
+docs: ## Generate API documentation
+	docker-compose exec api python -c "import app.main; print('API docs available at http://localhost:8000/docs')"
+
+docs-build: ## Build documentation
+	@echo "Documentation is auto-generated by FastAPI"
+	@echo "Access at http://localhost:8000/docs (Swagger UI)"
+	@echo "Access at http://localhost:8000/redoc (ReDoc)"
+
+# Backup and restore
+backup: ## Backup database
+	docker-compose exec db pg_dump -U postgres krishi_sakhi > backup_$(shell date +%Y%m%d_%H%M%S).sql
+	@echo "Database backup created"
+
+restore: ## Restore database from backup (usage: make restore BACKUP=backup_file.sql)
+	docker-compose exec -T db psql -U postgres krishi_sakhi < $(BACKUP)
+	@echo "Database restored from $(BACKUP)"
+
+# Cleanup
+clean: ## Clean up containers, volumes, and temporary files
+	docker-compose down -v --remove-orphans
+	docker system prune -f
+	rm -rf htmlcov/
+	rm -f *.json
+	rm -f *.sql
+	rm -rf .pytest_cache/
+	rm -rf .mypy_cache/
+	rm -rf .ruff_cache/
+	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+	find . -type f -name "*.pyc" -delete 2>/dev/null || true
+
+clean-logs: ## Clean up log files
+	docker-compose logs --no-color > logs_$(shell date +%Y%m%d_%H%M%S).txt
+	docker-compose down
+	@echo "Logs saved and containers stopped"
+
+# Development workflow
+dev: ## Start development environment
+	@echo "Starting development environment..."
+	@echo "1. Starting services..."
+	docker-compose up -d db redis
+	@echo "2. Waiting for services to be ready..."
+	sleep 10
+	@echo "3. Running migrations..."
+	docker-compose exec -T db psql -U postgres -d krishi_sakhi -c "SELECT 1;" || (echo "Database not ready, waiting..." && sleep 5)
+	@echo "4. Starting API in development mode..."
+	uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+dev-full: ## Start full development environment with all services
+	docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+
+# Production deployment
+deploy-staging: ## Deploy to staging environment
+	@echo "Deploying to staging..."
+	# Add staging deployment commands here
+
+deploy-prod: ## Deploy to production environment
+	@echo "Deploying to production..."
+	# Add production deployment commands here
+
+# Utility commands
+check-env: ## Check environment configuration
+	@echo "Checking environment configuration..."
+	@if [ ! -f .env ]; then echo "Warning: .env file not found. Copy from .env.example"; fi
+	@if [ -f .env ]; then echo "Environment file found"; fi
+	@echo "Required environment variables:"
+	@echo "- POSTGRES_*: Database configuration"
+	@echo "- REDIS_URL: Redis configuration"
+	@echo "- JWT_*: JWT configuration"
+	@echo "- SECRET_KEY: Application secret key"
+
+generate-keys: ## Generate JWT keys for development
+	@echo "Generating JWT keys..."
+	mkdir -p keys
+	openssl genrsa -out keys/private.pem 2048
+	openssl rsa -in keys/private.pem -pubout -out keys/public.pem
+	@echo "JWT keys generated in keys/ directory"
+
+# Monitoring and observability
+metrics: ## Show application metrics
+	@echo "Application metrics available at:"
+	@echo "- API: http://localhost:8000/metrics"
+	@echo "- Flower: http://localhost:5555"
+
+logs-structured: ## View structured logs
+	docker-compose logs -f api | jq .
+
+# Database management
+db-reset: ## Reset database (WARNING: This will delete all data)
+	@echo "WARNING: This will delete all data in the database!"
+	@read -p "Are you sure? (y/N): " confirm && [ "$$confirm" = "y" ]
+	docker-compose down
+	docker volume rm krishi-sakhi_postgres_data || true
+	docker-compose up -d db
+	sleep 10
+	make migrate
+	make seed
+
+db-shell: ## Open database shell with connection info
+	@echo "Opening database shell..."
+	@echo "Database: krishi_sakhi"
+	@echo "User: postgres"
+	@echo "Password: postgres"
+	docker-compose exec db psql -U postgres -d krishi_sakhi
+
+# API testing
+test-api: ## Test API endpoints with curl
+	@echo "Testing API endpoints..."
+	@echo "Health check:"
+	@curl -s http://localhost:8000/health | jq . || echo "API not responding"
+	@echo "API documentation:"
+	@curl -s http://localhost:8000/docs | head -20 || echo "Docs not accessible"
+
+# Celery operations
+celery-status: ## Check Celery worker status
+	docker-compose exec api celery -A app.tasks.celery_app inspect active
+
+celery-purge: ## Purge all Celery tasks
+	docker-compose exec api celery -A app.tasks.celery_app purge -f
+
+celery-flower: ## Start Flower monitoring
+	docker-compose exec api celery -A app.tasks.celery_app flower --port=5555
+
+# Quick development commands
+quick-start: ## Quick start for development
+	@echo "Quick starting development environment..."
+	make check-env
+	make up
+	sleep 15
+	make seed
+	@echo "Development environment ready!"
+	@echo "API: http://localhost:8000"
+	@echo "Docs: http://localhost:8000/docs"
+	@echo "Flower: http://localhost:5555"
+
+quick-test: ## Quick test run
+	make test-unit
+
+quick-lint: ## Quick lint check
+	ruff check app --fix
+	black app
+
+# Help for specific areas
+help-docker: ## Show Docker-related help
+	@echo "Docker Commands:"
+	@echo "  make up          - Start all services"
+	@echo "  make down        - Stop all services"
+	@echo "  make logs        - View logs"
+	@echo "  make build       - Build images"
+	@echo "  make clean       - Clean up everything"
+
+help-dev: ## Show development help
+	@echo "Development Commands:"
+	@echo "  make dev-install - Install dev dependencies"
+	@echo "  make fmt         - Format code"
+	@echo "  make lint        - Run linters"
+	@echo "  make test        - Run tests"
+	@echo "  make seed        - Seed demo data"
+
+help-db: ## Show database help
+	@echo "Database Commands:"
+	@echo "  make migrate     - Run migrations"
+	@echo "  make seed        - Seed demo data"
+	@echo "  make backup      - Backup database"
+	@echo "  make restore     - Restore database"
+	@echo "  make db-shell    - Open database shell"
